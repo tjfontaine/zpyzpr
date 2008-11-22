@@ -76,9 +76,20 @@ class GzipWorker(BaseWorker):
     pid, es = os.waitpid(p.pid, 0)
     self.status = es == 0 # if exit status wasn't 0 this will be false and we can clean up
 
+class Bzip2Worker(BaseWorker):
+  ext = '.bz2'
+  def __init__(self, src, dst, start, size, compression):
+    BaseWorker.__init__(self, src, dst, start, size, compression)
+    self.dummy = False
+
+  def run(self):
+    p = subprocess.Popen("dd if=%s skip=%d count=%d bs=1024 2> /dev/null | bzip2 -%d > %s" % (self.src, self.offset/BLOCK_SIZE, self.fsize/BLOCK_SIZE, self.comp, self.dst+'.bz2'), shell=True)
+    pid, es = os.waitpid(p.pid, 0)
+    self.status = es == 0 # if exit status wasn't 0 this will be false and we can clean up
+
 class ZpyZprOpts:
   def __init__(self, argv):
-    sopt = 'hkvTzj:bct'
+    sopt = 'hkvzjT:bct'
     lopt = ['help', 'keep', 'verbose', 'timing', 'gzip', 'bzip2', 'blocks=', 'compression=', 'threads=']
     self.verbose     = False
     self.timing      = False
@@ -123,7 +134,7 @@ class ZpyZprOpts:
       elif o in ('-z', '--gzip'):
         self.worker = GzipWorker
       elif o in ('-j', '--bzip2'):
-        self.worker = BaseWorker
+        self.worker = Bzip2Worker
     
     self.source = args[0]
 
