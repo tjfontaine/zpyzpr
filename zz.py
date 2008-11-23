@@ -89,7 +89,7 @@ class Bzip2Worker(BaseWorker):
 
 class ZpyZprOpts:
   def __init__(self, argv):
-    sopt = 'hkvzjT:bct'
+    sopt = 'b:c:hjkt:vzT'
     lopt = ['help', 'keep', 'verbose', 'timing', 'gzip', 'bzip2', 'blocks=', 'compression=', 'threads=']
     self.verbose     = False
     self.timing      = False
@@ -166,11 +166,14 @@ class ZpyZprOpts:
     p('                     (Default: 10M or the size of the file divided by the number of threads)'+e)
     p('-c --compression=  Compression Level (Default: 6)'+e)
     p('-h --help          Prints this message'+e)
+    p('-j --bzip2         Use bzip2 compression'+e)
     p('-k --keep          Keep source files (The original source and intermediate slices)'+e)
     p('-p --pattern       The pattern for intermediate slices (Default: xaa)'+e)
     p('                     The longer this string is the less likely a wrap will ocurr'+e)
     p('                     The succession algo only uses [a-z0-9]'+e)
     p('-t --threads=      Specify the number compression threads (Default: 4)'+e)
+    p('-T --timing        Prints timings only'+e)
+    p('-z --gzip          Use gzip compression (Default)'+e)
     p('-v --verbose       Prints timings and other debug information'+e)
 
 class ZpyZpr:
