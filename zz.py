@@ -24,10 +24,11 @@
 
 from __future__ import with_statement
 from datetime import datetime
-import getopt, os, sys, threading, string, subprocess, signal
+import getopt, os, sys, threading, string, subprocess, signal, zlib, struct
 
 CHUNK_SIZE_BYTES = 10*1024*1024 # 10 MB
 BLOCK_SIZE = 1024
+GZIP_HEADER = struct.pack("<BBBBBBBBBB", 31, 139, 8, 0, 0,0,0,0, 2, 3)
 
 def letter_next(c):
   while(True):
@@ -76,9 +77,17 @@ class GzipWorker(BaseWorker):
     self.dst = self.dst+'.gz'
 
   def run(self):
-    p = subprocess.Popen("dd if=%s skip=%d count=%d bs=1024 2> /dev/null | gzip -%d > %s" % (self.src, self.offset/BLOCK_SIZE, self.fsize/BLOCK_SIZE, self.comp, self.dst), shell=True)
-    pid, es = os.waitpid(p.pid, 0)
-    self.status = es == 0 # if exit status wasn't 0 this will be false and we can clean up
+    src = open(self.src, 'rb')
+    src.seek(self.offset)
+    count = 0
+
+    compobj = zlib.compressobj(self.comp, zlib.DEFLATED, -zlib.MAX_WBITS, zlib.DEF_MEM_LEVEL, 0)
+
+    data = src.read(self.fsize)
+    self.crc32 = zlib.crc32(data)
+    self.data = compobj.compress(data)
+    self.data += compobj.flush()
+    src.close()
     self.completed(self)
 
 class Bzip2Worker(BaseWorker):
@@ -320,12 +329,14 @@ class ZpyZpr:
     next_block = self.last_completed + 1
 
     while(next_block < len(self.completed) and self.completed[next_block]):
-      self.log(self.opts.verbose, "Combined %s" % self.completed[next_block].dst)
-      src = open(self.completed[next_block].dst, 'rb')
-      self.result_file.writelines(src)
-      src.close()
-
-      if not self.opts.keep: os.remove(self.completed[next_block].dst)
+      t = self.completed[next_block]
+      self.log(self.opts.verbose, "Combined %s" % t.dst)
+      src = self.result_file
+      src.write(GZIP_HEADER)
+      src.write(t.data)
+      src.write(struct.pack("<i", t.crc32))
+      src.write(struct.pack("<I", t.fsize))
+      t.data = None
 
       self.last_completed = next_block
       next_block += 1
