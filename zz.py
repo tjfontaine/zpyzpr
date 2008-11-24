@@ -22,8 +22,9 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 # OTHER DEALINGS IN THE SOFTWARE
 
-import getopt, os, sys, threading, string, subprocess
+from __future__ import with_statement
 from datetime import datetime
+import getopt, os, sys, threading, string, subprocess, signal
 
 CHUNK_SIZE_BYTES = 10*1024*1024 # 10 MB
 BLOCK_SIZE = 1024
@@ -52,8 +53,9 @@ def string_next(s):
 
 class BaseWorker(threading.Thread):
   ext = '.dummy'
-  def __init__(self, src, dst, start, size, compression):
+  def __init__(self, place, src, dst, start, size, compression):
     threading.Thread.__init__(self)
+    self.place = place
     self.status = True
     self.dummy = True
     self.src = src
@@ -61,24 +63,26 @@ class BaseWorker(threading.Thread):
     self.offset = start
     self.fsize = size
     self.comp = compression
+    self.completed = None
 
   def run(self):
     return True
 
 class GzipWorker(BaseWorker):
   ext = '.gz'
-  def __init__(self, src, dst, start, size, compression):
-    BaseWorker.__init__(self, src, dst, start, size, compression)
+  def __init__(self, place, src, dst, start, size, compression):
+    BaseWorker.__init__(self, place, src, dst, start, size, compression)
     self.dummy = False
 
   def run(self):
     p = subprocess.Popen("dd if=%s skip=%d count=%d bs=1024 2> /dev/null | gzip -%d > %s" % (self.src, self.offset/BLOCK_SIZE, self.fsize/BLOCK_SIZE, self.comp, self.dst+'.gz'), shell=True)
     pid, es = os.waitpid(p.pid, 0)
     self.status = es == 0 # if exit status wasn't 0 this will be false and we can clean up
+    self.completed(self)
 
 class Bzip2Worker(BaseWorker):
   ext = '.bz2'
-  def __init__(self, src, dst, start, size, compression):
+  def __init__(self, place, src, dst, start, size, compression):
     BaseWorker.__init__(self, src, dst, start, size, compression)
     self.dummy = False
 
@@ -86,6 +90,7 @@ class Bzip2Worker(BaseWorker):
     p = subprocess.Popen("dd if=%s skip=%d count=%d bs=1024 2> /dev/null | bzip2 -%d > %s" % (self.src, self.offset/BLOCK_SIZE, self.fsize/BLOCK_SIZE, self.comp, self.dst+'.bz2'), shell=True)
     pid, es = os.waitpid(p.pid, 0)
     self.status = es == 0 # if exit status wasn't 0 this will be false and we can clean up
+    self.completed(self)
 
 class ZpyZprOpts:
   def __init__(self, argv):
@@ -179,13 +184,12 @@ class ZpyZprOpts:
 class ZpyZpr:
   def __init__(self, opts):
     self.opts = opts
+    self.queue_lock = threading.Lock()
+    self.event_queue = []
 
     self.source_size = os.stat(opts.source).st_size
 
-    self.thread_queue = []
-    self.filenames = []
-    
-    self.create_files()
+    self.prepare_threads()
 
     b = datetime.now()
     self.log(self.opts.timing, "Beginning Compression (%d Pieces/%d Threads)" % (len(self.filenames), self.opts.threads))
@@ -204,8 +208,12 @@ class ZpyZpr:
     if os.path.exists(self.opts.destination):
       os.remove(self.opts.destination)
 
-  def create_files(self):
+  def prepare_threads(self):
+    self.thread_queue = []
+    self.filenames = []
+    self.completed = []
     bsize = 0
+
     if not self.opts.blocks:
       # Determine slice size based on number of threads and the default chunk size
       # by default if the file is less than 40MB it'll be size / threads
@@ -230,33 +238,59 @@ class ZpyZpr:
         self.cleanup()
         self.exit(1)
       
-      self.thread_queue.append(self.opts.worker(self.opts.source, pattern, count, size, self.opts.compression))
+      t = self.opts.worker(len(self.thread_queue), self.opts.source, pattern, count, size, self.opts.compression)
+      t.completed = self.thread_completed
+      self.thread_queue.append(t)
+      self.completed.append(None)
       self.filenames.append(pattern+self.opts.worker.ext)
       self.log(self.opts.verbose, 'Added Worker %s (offset:%d, size:%d)' % (pattern, count, size)) 
       count += size
       pattern = string_next(pattern)
 
+  def thread_completed(self, thread):
+    with self.queue_lock:
+      self.event_queue.append((self.add_completed, thread))
+      self.event_queue.append((self.start_another_thread,))
+
+  def add_completed(self, thread):
+    if not thread.status:
+      self.log(True, 'Thread %s Failed to complete properly' % thread.dst)
+      self.cleanup()
+      sys.exit(1)
+
+    self.log(self.opts.verbose, 'Thread %s completed' % thread)
+    self.completed[thread.place] = thread
+
+  def start_another_thread(self):
+    t = self.inactive_thread()
+    if t > -1 and len(self.thread_queue) > 0:
+      self.threads[t] = self.thread_queue.pop()
+      self.threads[t].start()
+      self.log(self.opts.verbose, 'Thread %s started' % self.threads[t].dst)
+
+  def run_queue(self):
+    while len(self.event_queue) > 0:
+      e = self.event_queue.pop()
+      print e
+      if len(e) > 1:
+        e[0](e[1])
+      else:
+        e[0]()
+
   def start(self):
     self.threads = []
 
     for i in range(self.opts.threads):
-      self.threads.append(BaseWorker('', '', 0, 0, 0))
+      t = self.thread_queue.pop()
+      t.start()
+      self.threads.append(t)
 
     while(len(self.thread_queue) > 0):
-      t = self.inactive_thread()
-      if t > -1:
-        if not self.threads[t].dummy:
-          if not self.threads[t].status:
-            self.log(True, 'Thread %s Failed to complete properly' % self.threads[t].dst)
-            self.cleanup()
-            sys.exit(1)
-          self.log(self.opts.verbose, 'Thread %s completed' % self.threads[t].dst)
-        self.threads[t] = self.thread_queue.pop()
-        self.threads[t].start()
-        self.log(self.opts.verbose, 'Thread %s started' % self.threads[t].dst)
+      self.run_queue()
 
     for t in self.threads:
       t.join()
+      self.run_queue()
 
   def log(self, display, message):
     if display: sys.stderr.write('[%s] %s%s' % (datetime.now(), message, os.linesep))
