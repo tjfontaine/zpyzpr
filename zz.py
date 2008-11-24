@@ -73,9 +73,10 @@ class GzipWorker(BaseWorker):
   def __init__(self, place, src, dst, start, size, compression):
     BaseWorker.__init__(self, place, src, dst, start, size, compression)
     self.dummy = False
+    self.dst = self.dst+'.gz'
 
   def run(self):
-    p = subprocess.Popen("dd if=%s skip=%d count=%d bs=1024 2> /dev/null | gzip -%d > %s" % (self.src, self.offset/BLOCK_SIZE, self.fsize/BLOCK_SIZE, self.comp, self.dst+'.gz'), shell=True)
+    p = subprocess.Popen("dd if=%s skip=%d count=%d bs=1024 2> /dev/null | gzip -%d > %s" % (self.src, self.offset/BLOCK_SIZE, self.fsize/BLOCK_SIZE, self.comp, self.dst), shell=True)
     pid, es = os.waitpid(p.pid, 0)
     self.status = es == 0 # if exit status wasn't 0 this will be false and we can clean up
     self.completed(self)
@@ -85,9 +86,10 @@ class Bzip2Worker(BaseWorker):
   def __init__(self, place, src, dst, start, size, compression):
     BaseWorker.__init__(self, src, dst, start, size, compression)
     self.dummy = False
+    self.dst = self.dst+'bz2'
 
   def run(self):
-    p = subprocess.Popen("dd if=%s skip=%d count=%d bs=1024 2> /dev/null | bzip2 -%d > %s" % (self.src, self.offset/BLOCK_SIZE, self.fsize/BLOCK_SIZE, self.comp, self.dst+'.bz2'), shell=True)
+    p = subprocess.Popen("dd if=%s skip=%d count=%d bs=1024 2> /dev/null | bzip2 -%d > %s" % (self.src, self.offset/BLOCK_SIZE, self.fsize/BLOCK_SIZE, self.comp, self.dst), shell=True)
     pid, es = os.waitpid(p.pid, 0)
     self.status = es == 0 # if exit status wasn't 0 this will be false and we can clean up
     self.completed(self)
@@ -186,6 +188,7 @@ class ZpyZpr:
     self.opts = opts
     self.queue_lock = threading.Lock()
     self.event_queue = []
+    self.result_file = None
 
     self.source_size = os.stat(opts.source).st_size
 
@@ -195,9 +198,12 @@ class ZpyZpr:
     self.log(self.opts.timing, "Beginning Compression (%d Pieces/%d Threads)" % (len(self.filenames), self.opts.threads))
     self.start()
 
-    self.log(self.opts.verbose, "Combing Slices")
+    self.log(self.opts.verbose, "Combing Leftover Slices")
     self.combine()
     e = datetime.now()
+
+    self.result_file.close()
+    if not self.opts.keep: os.remove(self.opts.source)
 
     self.log(self.opts.timing, 'Total Time: '+str(e - b))
 
@@ -212,6 +218,7 @@ class ZpyZpr:
     self.thread_queue = []
     self.filenames = []
     self.completed = []
+    self.last_completed = -1
     bsize = 0
 
     if not self.opts.blocks:
@@ -258,8 +265,10 @@ class ZpyZpr:
       self.cleanup()
       sys.exit(1)
 
-    self.log(self.opts.verbose, 'Thread %s completed' % thread)
+    self.log(self.opts.verbose, 'Thread %s completed' % thread.dst)
     self.completed[thread.place] = thread
+    with self.queue_lock:
+      self.event_queue.append((self.combine,))
 
   def start_another_thread(self):
     t = self.inactive_thread()
@@ -271,7 +280,6 @@ class ZpyZpr:
   def run_queue(self):
     while len(self.event_queue) > 0:
       e = self.event_queue.pop()
-      print e
       if len(e) > 1:
         e[0](e[1])
       else:
@@ -279,6 +287,8 @@ class ZpyZpr:
 
   def start(self):
     self.threads = []
+
+    self.thread_queue.reverse()
 
     for i in range(self.opts.threads):
       t = self.thread_queue.pop()
@@ -301,18 +311,23 @@ class ZpyZpr:
     return -1
   
   def combine(self):
-    if os.path.exists(self.opts.destination):
-      self.log(True, "%s Destination File Already Exists" % self.opts.destination)
-      sys.exit(1)
+    if not self.result_file:
+      if os.path.exists(self.opts.destination):
+        self.log(True, "%s Destination File Already Exists" % self.opts.destination)
+        sys.exit(1)
+      self.result_file = open(self.opts.destination, 'wb')
 
-    dest = open(self.opts.destination, 'wb')
+    next_block = self.last_completed + 1
 
-    for f in self.filenames:
-      src = open(f, 'rb')
-      dest.writelines(src)
+    while(next_block < len(self.completed) and self.completed[next_block]):
+      self.log(self.opts.verbose, "Combined %s" % self.completed[next_block].dst)
+      src = open(self.completed[next_block].dst, 'rb')
+      self.result_file.writelines(src)
       src.close()
-      if not self.opts.keep: os.remove(f)
 
-    if not self.opts.keep: os.remove(self.opts.source)
+      if not self.opts.keep: os.remove(self.completed[next_block].dst)
+
+      self.last_completed = next_block
+      next_block += 1
 
 ZpyZpr(ZpyZprOpts(sys.argv[1:]))
