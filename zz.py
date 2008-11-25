@@ -44,28 +44,6 @@ BLOCK_SIZE = 1024
 #GZIP_HEADER = struct.pack("<BBBBBBBBBB", 31, 139, 8, 0, 0,0,0,0, 2, 3)
 GZIP_HEADER = '\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03'
 
-def letter_next(c):
-  while(True):
-    c = chr((ord(c) + 1) % 255)
-    if c in string.ascii_lowercase or c in string.digits: return c
-
-def string_next(s):
-  r = []
-  for c in s:
-    r.append(c)
-  r.reverse()
-
-  s = []
-  inc = True
-  for c in r:
-    if inc:
-      c = letter_next(c)
-      inc = c == '9'
-    s.append(c)
-
-  s.reverse()
-  return ''.join(s)
-
 class BaseWorker(Thread):
   ext = '.dummy'
   def __init__(self, place, src, start, size, compression, queue):
