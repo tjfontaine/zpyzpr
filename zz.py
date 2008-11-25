@@ -79,13 +79,13 @@ class GzipWorker(BaseWorker):
   ext = '.gz'
   def __init__(self, place, src, start, size, compression, queue):
     BaseWorker.__init__(self, place, src, start, size, compression, queue)
-    self.compobj = zlib.compressobj(self.comp, zlib.DEFLATED, -zlib.MAX_WBITS, zlib.DEF_MEM_LEVEL, 0)
+    self.compobj = self.zlib.compressobj(self.comp, self.zlib.DEFLATED, -self.zlib.MAX_WBITS, self.zlib.DEF_MEM_LEVEL, 0)
 
   def header(self):
     return GZIP_HEADER
 
   def suffix(self):
-    return struct.pack('<II', zlib.crc32(self.raw_data) & 0xFFFFFFFF, self.fsize)
+    return struct.pack('<II', self.zlib.crc32(self.raw_data) & 0xFFFFFFFF, self.fsize)
 
 
 class Bzip2Worker(BaseWorker):
@@ -98,7 +98,7 @@ class Bzip2Worker(BaseWorker):
   ext = '.bz2'
   def __init__(self, place, src, start, size, compression, queue):
     BaseWorker.__init__(self, place, src, start, size, compression, queue)
-    self.compobj = bz2.BZ2Compressor(self.comp)
+    self.compobj = self.bz2.BZ2Compressor(self.comp)
 
   def header(self):
     return ''
