@@ -1,0 +1,24 @@
+Zippy Zipper - ZpyZpr - zz (zzg, zzb) - A multi-process/threaded compression utility
+
+Zippy Zipper makes use of the design features of gzip and bzip2 that allow many
+compressed pieces of a source file to be concatenated together and result in a valid
+compressed file. ZpyZpr relies only on the zlib and bz2 modules for the compression
+logic. ZpyZpr falls back to the threading module which may or may not distribute
+over your cores/cpus. To avoid limitations from threading ZpyZpr can use the
+multiprocessing module available in Python >= 2.6, failing that it will use the
+processing module (http://pypi.python.org/pypi/processing) on Python <= 2.5. Using
+the processing modules causes ZpyZpr to spawn multiple Python processes which allow
+the operating system to distribute the load over your cores/cpus.
+
+Benchmark --
+On a 952360960 byte (909MB) tar of a filesystem compression level 6
+    Util    Time          Size
+    gzip    1m:14.671s    570952697
+    zpyzpr  0m:40.605s    570902159
+    
+    delta   -34.066s      -50538
+
+    bzip2   3m:56.570s    552406368
+    zpyzpr  2m:08.820s    554363293
+
+    delta   -107.75s      +1956925
