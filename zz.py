@@ -22,9 +22,16 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 # OTHER DEALINGS IN THE SOFTWARE
 
-from __future__ import with_statement
 from datetime import datetime
-import getopt, os, sys, threading, string, subprocess, signal, zlib, struct
+import getopt, os, sys, string, subprocess, signal, zlib, struct
+
+try:
+  from multiprocessing import Process as Thread, Queue
+  MULTIPROCESSING = True
+except:
+  from threading import Thread
+  from Queue import Queue
+  MULTIPROCESSING = False
 
 CHUNK_SIZE_BYTES = 10*1024*1024 # 10 MB
 BLOCK_SIZE = 1024
@@ -52,10 +59,10 @@ def string_next(s):
   s.reverse()
   return ''.join(s)
 
-class BaseWorker(threading.Thread):
+class BaseWorker(Thread):
   ext = '.dummy'
-  def __init__(self, place, src, dst, start, size, compression):
-    threading.Thread.__init__(self)
+  def __init__(self, place, src, dst, start, size, compression, queue):
+    Thread.__init__(self)
     self.place = place
     self.status = True
     self.dummy = True
@@ -64,15 +71,15 @@ class BaseWorker(threading.Thread):
     self.offset = start
     self.fsize = size
     self.comp = compression
-    self.completed = None
+    self.queue = queue
 
   def run(self):
     return True
 
 class GzipWorker(BaseWorker):
   ext = '.gz'
-  def __init__(self, place, src, dst, start, size, compression):
-    BaseWorker.__init__(self, place, src, dst, start, size, compression)
+  def __init__(self, place, src, dst, start, size, compression, queue):
+    BaseWorker.__init__(self, place, src, dst, start, size, compression, queue)
     self.dummy = False
     self.dst = self.dst+'.gz'
 
@@ -88,7 +95,7 @@ class GzipWorker(BaseWorker):
     self.data = compobj.compress(data)
     self.data += compobj.flush()
     src.close()
-    self.completed(self)
+    self.queue.put((self.place, self.crc32, self.fsize, self.data))
 
 class Bzip2Worker(BaseWorker):
   ext = '.bz2'
@@ -195,8 +202,7 @@ class ZpyZprOpts:
 class ZpyZpr:
   def __init__(self, opts):
     self.opts = opts
-    self.queue_lock = threading.Lock()
-    self.event_queue = []
+    self.event_queue = Queue()
     self.result_file = None
 
     self.source_size = os.stat(opts.source).st_size
@@ -254,8 +260,7 @@ class ZpyZpr:
         self.cleanup()
         self.exit(1)
       
-      t = self.opts.worker(len(self.thread_queue), self.opts.source, pattern, count, size, self.opts.compression)
-      t.completed = self.thread_completed
+      t = self.opts.worker(len(self.thread_queue), self.opts.source, pattern, count, size, self.opts.compression, self.event_queue)
       self.thread_queue.append(t)
       self.completed.append(None)
       self.filenames.append(pattern+self.opts.worker.ext)
@@ -263,36 +268,20 @@ class ZpyZpr:
       count += size
       pattern = string_next(pattern)
 
-  def thread_completed(self, thread):
-    with self.queue_lock:
-      self.event_queue.append((self.add_completed, thread))
-      self.event_queue.append((self.start_another_thread,))
-
-  def add_completed(self, thread):
-    if not thread.status:
-      self.log(True, 'Thread %s Failed to complete properly' % thread.dst)
-      self.cleanup()
-      sys.exit(1)
-
-    self.log(self.opts.verbose, 'Thread %s completed' % thread.dst)
-    self.completed[thread.place] = thread
-    with self.queue_lock:
-      self.event_queue.append((self.combine,))
-
   def start_another_thread(self):
     t = self.inactive_thread()
     if t > -1 and len(self.thread_queue) > 0:
       self.threads[t] = self.thread_queue.pop()
       self.threads[t].start()
-      self.log(self.opts.verbose, 'Thread %s started' % self.threads[t].dst)
+      self.log(self.opts.verbose, 'Thread Started Piece %d' % (self.threads[t].place+1))
 
   def run_queue(self):
-    while len(self.event_queue) > 0:
-      e = self.event_queue.pop()
-      if len(e) > 1:
-        e[0](e[1])
-      else:
-        e[0]()
+    while not self.event_queue.empty():
+      (place, crc32, fsize, data) = self.event_queue.get()
+      self.log(self.opts.verbose, 'Thread Completed Piece %d' % (place+1))
+      self.completed[place] = (crc32, fsize, data)
+      self.start_another_thread()
+      self.combine()
 
   def start(self):
     self.threads = []
@@ -316,7 +305,10 @@ class ZpyZpr:
 
   def inactive_thread(self):
     for i in range(len(self.threads)):
-      if not self.threads[i].isAlive(): return i
+      if MULTIPROCESSING:
+        if not self.threads[i].is_alive(): return i
+      else:
+        if not self.threads[i].isAlive(): return i
     return -1
   
   def combine(self):
@@ -330,13 +322,15 @@ class ZpyZpr:
 
     while(next_block < len(self.completed) and self.completed[next_block]):
       t = self.completed[next_block]
-      self.log(self.opts.verbose, "Combined %s" % t.dst)
+      (crc32, fsize, data) = t
+      self.log(self.opts.verbose, "Combined %s" % (next_block+1))
       src = self.result_file
       src.write(GZIP_HEADER)
-      src.write(t.data)
-      src.write(struct.pack("<i", t.crc32))
-      src.write(struct.pack("<I", t.fsize))
-      t.data = None
+      src.write(data)
+      src.write(struct.pack("<i", crc32))
+      src.write(struct.pack("<I", fsize))
+      data = None
+      del data
 
       self.last_completed = next_block
       next_block += 1
