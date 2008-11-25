@@ -23,14 +23,16 @@
 # OTHER DEALINGS IN THE SOFTWARE
 
 from datetime import datetime
-import getopt, os, sys, string, subprocess, signal, zlib, struct
+import getopt, os, sys, string, subprocess, signal, zlib, struct, time
 
 try:
   from multiprocessing import Process as Thread, Queue
+  from Queue import Empty
   MULTIPROCESSING = True
-except:
+except Exception, ex:
+  print ex
   from threading import Thread
-  from Queue import Queue
+  from Queue import Queue, Empty
   MULTIPROCESSING = False
 
 CHUNK_SIZE_BYTES = 10*1024*1024 # 10 MB
@@ -210,7 +212,9 @@ class ZpyZpr:
     self.prepare_threads()
 
     b = datetime.now()
-    self.log(self.opts.timing, "Beginning Compression (%d Pieces/%d Threads)" % (len(self.filenames), self.opts.threads))
+    module = 'multiprocessing'
+    if not MULTIPROCESSING: module = 'threading'
+    self.log(self.opts.timing, "Beginning Compression using %s (%d Pieces/%d Threads)" % (module, len(self.filenames), self.opts.threads))
     self.start()
 
     self.log(self.opts.verbose, "Combing Leftover Slices")
@@ -268,37 +272,44 @@ class ZpyZpr:
       count += size
       pattern = string_next(pattern)
 
-  def start_another_thread(self):
-    t = self.inactive_thread()
-    if t > -1 and len(self.thread_queue) > 0:
-      self.threads[t] = self.thread_queue.pop()
-      self.threads[t].start()
-      self.log(self.opts.verbose, 'Thread Started Piece %d' % (self.threads[t].place+1))
+  def get_item(self):
+    try:
+      e = self.event_queue.get(timeout=0.25)
+      return e
+    except Empty:
+      return None
 
   def run_queue(self):
-    while not self.event_queue.empty():
-      (place, crc32, fsize, data) = self.event_queue.get()
+    item = self.get_item()
+    while item:
+      (place, crc32, fsize, data) = item
       self.log(self.opts.verbose, 'Thread Completed Piece %d' % (place+1))
       self.completed[place] = (crc32, fsize, data)
-      self.start_another_thread()
+      if len(self.thread_queue) > 0:
+        t = self.thread_queue.pop()
+        self.thread_started.append(t)
+        self.log(self.opts.verbose, 'Thread Started Piece %d' % (t.place+1))
+        t.start()
       self.combine()
+      item = self.get_item()
 
   def start(self):
-    self.threads = []
-
     self.thread_queue.reverse()
+    self.last_started = 0
+    self.thread_started = []
 
     for i in range(self.opts.threads):
       t = self.thread_queue.pop()
+      self.thread_started.append(t)
       t.start()
-      self.threads.append(t)
 
-    while(len(self.thread_queue) > 0):
+    while self.last_completed < len(self.completed):
       self.run_queue()
+      self.log(self.opts.verbose, 'Progress %d/%d' % (self.last_completed, len(self.completed)))
 
-    for t in self.threads:
+    self.log(self.opts.verbose, 'Joining all threads')
+    for t in self.thread_started:
       t.join()
-      self.run_queue()
 
   def log(self, display, message):
     if display: sys.stderr.write('[%s] %s%s' % (datetime.now(), message, os.linesep))
@@ -334,5 +345,7 @@ class ZpyZpr:
 
       self.last_completed = next_block
       next_block += 1
+
+    if next_block == len(self.completed): self.last_completed += 1
 
 ZpyZpr(ZpyZprOpts(sys.argv[1:]))
