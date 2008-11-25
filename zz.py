@@ -23,7 +23,7 @@
 # OTHER DEALINGS IN THE SOFTWARE
 
 from datetime import datetime
-import getopt, os, sys, string, subprocess, signal, zlib, struct, time
+import getopt, os, sys, string, signal, struct, time
 
 try:
   from multiprocessing import Process as Thread, Queue
@@ -41,7 +41,8 @@ except Exception, ex:
 
 CHUNK_SIZE_BYTES = 10*1024*1024 # 10 MB
 BLOCK_SIZE = 1024
-GZIP_HEADER = struct.pack("<BBBBBBBBBB", 31, 139, 8, 0, 0,0,0,0, 2, 3)
+#GZIP_HEADER = struct.pack("<BBBBBBBBBB", 31, 139, 8, 0, 0,0,0,0, 2, 3)
+GZIP_HEADER = '\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03'
 
 def letter_next(c):
   while(True):
@@ -67,56 +68,66 @@ def string_next(s):
 
 class BaseWorker(Thread):
   ext = '.dummy'
-  def __init__(self, place, src, dst, start, size, compression, queue):
+  def __init__(self, place, src, start, size, compression, queue):
     Thread.__init__(self)
     self.place = place
     self.status = True
-    self.dummy = True
     self.src = src
-    self.dst = dst
     self.offset = start
     self.fsize = size
     self.comp = compression
     self.queue = queue
 
   def run(self):
-    return True
-
-class GzipWorker(BaseWorker):
-  ext = '.gz'
-  def __init__(self, place, src, dst, start, size, compression, queue):
-    BaseWorker.__init__(self, place, src, dst, start, size, compression, queue)
-    self.dummy = False
-    self.dst = self.dst+'.gz'
-
-  def run(self):
     src = open(self.src, 'rb')
     src.seek(self.offset)
     count = 0
 
-    compobj = zlib.compressobj(self.comp, zlib.DEFLATED, -zlib.MAX_WBITS, zlib.DEF_MEM_LEVEL, 0)
-
-    data = src.read(self.fsize)
-    crc32 = zlib.crc32(data)
-    data = compobj.compress(data)
-    data += compobj.flush()
+    self.raw_data = src.read(self.fsize)
+    data = self.compobj.compress(self.raw_data)
+    data += self.compobj.flush()
     src.close()
-    suffix = struct.pack("<II", crc32, self.fsize)
-    self.queue.put((self.place, GZIP_HEADER, suffix, data))
+    self.queue.put((self.place, self.header(), self.suffix(), data))
     data = None
+    self.raw_data = None
+
+class GzipWorker(BaseWorker):
+  try:
+    import zlib
+    enabled = True
+  except:
+    enabled = False
+
+  ext = '.gz'
+  def __init__(self, place, src, start, size, compression, queue):
+    BaseWorker.__init__(self, place, src, start, size, compression, queue)
+    self.compobj = zlib.compressobj(self.comp, zlib.DEFLATED, -zlib.MAX_WBITS, zlib.DEF_MEM_LEVEL, 0)
+
+  def header(self):
+    return GZIP_HEADER
+
+  def suffix(self):
+    return struct.pack('<II', zlib.crc32(self.raw_data) & 0xFFFFFFFF, self.fsize)
+
 
 class Bzip2Worker(BaseWorker):
-  ext = '.bz2'
-  def __init__(self, place, src, dst, start, size, compression):
-    BaseWorker.__init__(self, src, dst, start, size, compression)
-    self.dummy = False
-    self.dst = self.dst+'bz2'
+  try:
+    import bz2
+    enabled = True
+  except:
+    enabled = False
 
-  def run(self):
-    p = subprocess.Popen("dd if=%s skip=%d count=%d bs=1024 2> /dev/null | bzip2 -%d > %s" % (self.src, self.offset/BLOCK_SIZE, self.fsize/BLOCK_SIZE, self.comp, self.dst), shell=True)
-    pid, es = os.waitpid(p.pid, 0)
-    self.status = es == 0 # if exit status wasn't 0 this will be false and we can clean up
-    self.completed(self)
+  ext = '.bz2'
+  def __init__(self, place, src, start, size, compression, queue):
+    BaseWorker.__init__(self, place, src, start, size, compression, queue)
+    self.compobj = bz2.BZ2Compressor(self.comp)
+
+  def header(self):
+    return ''
+
+  def suffix(self):
+    return ''
+
 
 class ZpyZprOpts:
   def __init__(self, argv):
@@ -128,18 +139,19 @@ class ZpyZprOpts:
     self.threads     = 4 # Should this be determined magically?
     self.keep        = False
     self.compression = 6
-    self.pattern     = 'xaa'
-    self.worker      = GzipWorker
+
+    if GzipWorker.enabled:
+      self.worker    = GzipWorker
+    elif Bzip2Worker.enabled:
+      self.worker    = Bzip2Worker
+    else:
+      sys.stderr.write('No compression libraries available.' + os.linesep)
+      sys.exit(2)
 
     try:
       opts, args = getopt.getopt(argv, sopt, lopt)
     except getopt.GetoptError, err:
       sys.stderr.write(str(err) + os.linesep)
-      self.usage(True)
-      sys.exit(2)
-
-    if len(args) < 1 or len(args) > 2:
-      sys.stderr.write('Wrong number of arguments passed.' + os.linesep)
       self.usage(True)
       sys.exit(2)
     
@@ -158,15 +170,26 @@ class ZpyZprOpts:
         self.threads = int(a)
       elif o in ('-c', '--compression'):
         self.compression = int(a)
-      elif o in ('-p', '--pattern'):
-        self.pattern = a
       elif o in ('-T', '--timing'):
         self.timing = True
       elif o in ('-z', '--gzip'):
-        self.worker = GzipWorker
+        if GzipWorker.enabled:
+          self.worker = GzipWorker
+        else:
+          sys.stderr.write('zlib module not available for compression' + os.linesep)
+          sys.exit(2)
       elif o in ('-j', '--bzip2'):
-        self.worker = Bzip2Worker
+        if Bzip2Worker.enabled:
+          self.worker = Bzip2Worker
+        else:
+          sys.stderr.write('bz2 module not available for compression' + os.linesep)
+          sys.exit(2)
     
+    if len(args) < 1 or len(args) > 2:
+      sys.stderr.write('Wrong number of arguments passed.' + os.linesep)
+      self.usage(True)
+      sys.exit(2)
+
     self.source = args[0]
 
     if len(args) == 2:
@@ -191,6 +214,19 @@ class ZpyZprOpts:
     else:
       p = sys.stdout.write
 
+    gzip_enabled = 'gzip compression is '
+    if GzipWorker.enabled:
+      gzip_enabled += 'enabled'
+    else:
+      gzip_enabled += 'disabled'
+
+
+    bzip_enabled = 'bzip2 compression is '
+    if Bzip2Worker.enabled:
+      bzip_enabled += 'enabled'
+    else:
+      bzip_enabled += 'disabled'
+
     p('zz [opts] <sourcefile> [destinationfile]'+e)
     p(''+e)
     p('-b --blocks=       Specify the logical block size for each compressed block'+e)
@@ -198,13 +234,12 @@ class ZpyZprOpts:
     p('-c --compression=  Compression Level (Default: 6)'+e)
     p('-h --help          Prints this message'+e)
     p('-j --bzip2         Use bzip2 compression'+e)
+    p('                     '+bzip_enabled+e)
     p('-k --keep          Keep source files (The original source and intermediate slices)'+e)
-    p('-p --pattern       The pattern for intermediate slices (Default: xaa)'+e)
-    p('                     The longer this string is the less likely a wrap will ocurr'+e)
-    p('                     The succession algo only uses [a-z0-9]'+e)
     p('-t --threads=      Specify the number compression threads (Default: 4)'+e)
     p('-T --timing        Prints timings only'+e)
     p('-z --gzip          Use gzip compression (Default)'+e)
+    p('                     '+gzip_enabled+e)
     p('-v --verbose       Prints timings and other debug information'+e)
 
 class ZpyZpr:
@@ -218,7 +253,7 @@ class ZpyZpr:
     self.prepare_threads()
 
     b = datetime.now()
-    self.log(self.opts.timing, "Beginning Compression using %s (%d Pieces/%d Threads)" % (MULTIPROCESSING, len(self.filenames), self.opts.threads))
+    self.log(self.opts.timing, "Beginning Compression using %s (%d Pieces/%d Threads)" % (MULTIPROCESSING, len(self.thread_queue), self.opts.threads))
     self.start()
 
     self.log(self.opts.verbose, "Combing Leftover Slices")
@@ -231,15 +266,17 @@ class ZpyZpr:
     self.log(self.opts.timing, 'Total Time: '+str(e - b))
 
   def cleanup(self):
-    for f in self.filenames:
-      if os.path.exists(f): os.remove(f)
+    for t in self.thread_started:
+      try:
+        t.join()
+      except:
+        self.log(self.opts.verbose, "Thread %d never started" % t.place)
 
     if os.path.exists(self.opts.destination):
       os.remove(self.opts.destination)
 
   def prepare_threads(self):
     self.thread_queue = []
-    self.filenames = []
     self.completed = []
     self.last_completed = -1
     bsize = 0
@@ -254,8 +291,6 @@ class ZpyZpr:
     else:
       bsize = self.opts.blocks
 
-    pattern = self.opts.pattern
-
     count = 0
     while(count < self.source_size):
       if self.source_size - count < bsize:
@@ -263,18 +298,11 @@ class ZpyZpr:
       else:
         size = bsize
 
-      if os.path.exists(pattern+self.opts.worker.ext):
-        self.log(True, '%s Temporary file already exists!' % pattern+self.opts.worker.ext)
-        self.cleanup()
-        self.exit(1)
-      
-      t = self.opts.worker(len(self.thread_queue), self.opts.source, pattern, count, size, self.opts.compression, self.event_queue)
+      t = self.opts.worker(len(self.thread_queue), self.opts.source, count, size, self.opts.compression, self.event_queue)
       self.thread_queue.append(t)
       self.completed.append(None)
-      self.filenames.append(pattern+self.opts.worker.ext)
-      self.log(self.opts.verbose, 'Added Worker %s (offset:%d, size:%d)' % (pattern, count, size)) 
+      self.log(self.opts.verbose, 'Added Worker %d (offset:%d, size:%d)' % (len(self.thread_queue), count, size))
       count += size
-      pattern = string_next(pattern)
 
   def get_item(self):
     try:
