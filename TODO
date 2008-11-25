@@ -1,0 +1,5 @@
+ * compress in/out stdin
+ * lzma compression
+ * handle signit
+ * progress bar
+ * basename based invocation (zzg, zzb)
