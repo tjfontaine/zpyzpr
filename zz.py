@@ -38,6 +38,22 @@ except Exception, ex:
     from threading import Thread
     from Queue import Queue, Empty
     MULTIPROCESSING = 'threading'
+    class FakePipe:
+      def __init__(self):
+        self.q = Queue()
+
+      def recv(self):
+        return self.q.get()
+
+      def send(self, value):
+        return self.q.put(value)
+
+      def close(self):
+        return True
+
+    def Pipe():
+      q = FakePipe()
+      return (q, q)
 
 CHUNK_SIZE_BYTES = 10*1024*1024 # 10 MB
 BLOCK_SIZE = 1024
