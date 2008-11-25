@@ -30,13 +30,11 @@ try:
   from Queue import Empty
   MULTIPROCESSING = 'multiprocessing'
 except Exception, ex:
-  print ex
   try:
     from processing import Process as Thread, Queue
     from Queue import Empty
     MULTIPROCESSING = 'processing'
   except Exception, ex:
-    print ex
     from threading import Thread
     from Queue import Queue, Empty
     MULTIPROCESSING = 'threading'
@@ -99,11 +97,13 @@ class GzipWorker(BaseWorker):
     compobj = zlib.compressobj(self.comp, zlib.DEFLATED, -zlib.MAX_WBITS, zlib.DEF_MEM_LEVEL, 0)
 
     data = src.read(self.fsize)
-    self.crc32 = zlib.crc32(data)
-    self.data = compobj.compress(data)
-    self.data += compobj.flush()
+    crc32 = zlib.crc32(data)
+    data = compobj.compress(data)
+    data += compobj.flush()
     src.close()
-    self.queue.put((self.place, self.crc32, self.fsize, self.data))
+    suffix = struct.pack("<II", crc32, self.fsize)
+    self.queue.put((self.place, GZIP_HEADER, suffix, data))
+    data = None
 
 class Bzip2Worker(BaseWorker):
   ext = '.bz2'
@@ -286,9 +286,9 @@ class ZpyZpr:
   def run_queue(self):
     item = self.get_item()
     while item:
-      (place, crc32, fsize, data) = item
+      (place, header, suffix, data) = item
       self.log(self.opts.verbose, 'Thread Completed Piece %d' % (place+1))
-      self.completed[place] = (crc32, fsize, data)
+      self.completed[place] = (header, suffix, data)
       if len(self.thread_queue) > 0:
         t = self.thread_queue.pop()
         self.thread_started.append(t)
@@ -329,13 +329,12 @@ class ZpyZpr:
 
     while(next_block < len(self.completed) and self.completed[next_block]):
       t = self.completed[next_block]
-      (crc32, fsize, data) = t
+      (header, suffix, data) = t
       self.log(self.opts.verbose, "Combined %s" % (next_block+1))
       src = self.result_file
-      src.write(GZIP_HEADER)
+      src.write(header)
       src.write(data)
-      src.write(struct.pack("<I", crc32))
-      src.write(struct.pack("<I", fsize))
+      src.write(suffix)
       data = None
       del data
 
