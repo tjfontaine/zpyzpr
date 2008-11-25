@@ -28,12 +28,18 @@ import getopt, os, sys, string, subprocess, signal, zlib, struct, time
 try:
   from multiprocessing import Process as Thread, Queue
   from Queue import Empty
-  MULTIPROCESSING = True
+  MULTIPROCESSING = 'multiprocessing'
 except Exception, ex:
   print ex
-  from threading import Thread
-  from Queue import Queue, Empty
-  MULTIPROCESSING = False
+  try:
+    from processing import Process as Thread, Queue
+    from Queue import Empty
+    MULTIPROCESSING = 'processing'
+  except Exception, ex:
+    print ex
+    from threading import Thread
+    from Queue import Queue, Empty
+    MULTIPROCESSING = 'threading'
 
 CHUNK_SIZE_BYTES = 10*1024*1024 # 10 MB
 BLOCK_SIZE = 1024
@@ -212,9 +218,7 @@ class ZpyZpr:
     self.prepare_threads()
 
     b = datetime.now()
-    module = 'multiprocessing'
-    if not MULTIPROCESSING: module = 'threading'
-    self.log(self.opts.timing, "Beginning Compression using %s (%d Pieces/%d Threads)" % (module, len(self.filenames), self.opts.threads))
+    self.log(self.opts.timing, "Beginning Compression using %s (%d Pieces/%d Threads)" % (MULTIPROCESSING, len(self.filenames), self.opts.threads))
     self.start()
 
     self.log(self.opts.verbose, "Combing Leftover Slices")
@@ -314,14 +318,6 @@ class ZpyZpr:
   def log(self, display, message):
     if display: sys.stderr.write('[%s] %s%s' % (datetime.now(), message, os.linesep))
 
-  def inactive_thread(self):
-    for i in range(len(self.threads)):
-      if MULTIPROCESSING:
-        if not self.threads[i].is_alive(): return i
-      else:
-        if not self.threads[i].isAlive(): return i
-    return -1
-  
   def combine(self):
     if not self.result_file:
       if os.path.exists(self.opts.destination):
@@ -338,7 +334,7 @@ class ZpyZpr:
       src = self.result_file
       src.write(GZIP_HEADER)
       src.write(data)
-      src.write(struct.pack("<i", crc32))
+      src.write(struct.pack("<I", crc32))
       src.write(struct.pack("<I", fsize))
       data = None
       del data
