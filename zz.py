@@ -37,6 +37,7 @@ except Exception, ex:
   except Exception, ex:
     from threading import Thread
     from Queue import Queue, Empty
+    import subprocess
     MULTIPROCESSING = 'threading'
     class FakePipe:
       def __init__(self):
@@ -85,11 +86,17 @@ class BaseWorker(Thread):
     while self.running:
       item = self.get_item()
       if item:
-        compobj = self.get_compobj()
         (self.raw_data, place) = item
         self.fsize = len(self.raw_data)
-        data = compobj.compress(self.raw_data)
-        data += compobj.flush() 
+
+        if not self.popen:
+          compobj = self.get_compobj()
+          data = compobj.compress(self.raw_data)
+          data += compobj.flush()
+        else:
+          p = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+          (data, stderr) = p.communicate(self.raw_data)
+
         self.queue.put((self.threadid, place, self.header(), self.suffix(), data))
         data = None
         self.raw_data = None
@@ -102,6 +109,19 @@ class GzipWorker(BaseWorker):
     enabled = False
 
   ext = '.gz'
+
+  def __init__(self, threadid, compression, queue, pipe):
+    BaseWorker.__init__(self, threadid, compression, queue, pipe)
+    if MULTIPROCESSING == 'threading':
+      try:
+        p = subprocess.Popen(['gzip', '-L'], stdout=subprocess.PIPE)
+        (stdout, stderr) = p.communicate()
+        self.command = ['gzip', '-c', '-%d' % self.comp]
+        self.popen = True
+      except:
+        self.popen = False
+    else:
+      self.popen = False
 
   def get_compobj(self):
     return self.zlib.compressobj(self.comp, self.zlib.DEFLATED, -self.zlib.MAX_WBITS, self.zlib.DEF_MEM_LEVEL, 0)
@@ -121,6 +141,19 @@ class Bzip2Worker(BaseWorker):
     enabled = False
 
   ext = '.bz2'
+
+  def __init__(self, threadid, compression, queue, pipe):
+    BaseWorker.__init__(self, threadid, compression, queue, pipe)
+    if MULTIPROCESSING == 'threading':
+      try:
+        p = subprocess.Popen(['bzip2', '-L'], stdout=subprocess.PIPE)
+        (stdout, stderr) = p.communicate()
+        self.command = ['bzip2', '-c', '-%d' % self.comp]
+        self.popen = True
+      except:
+        self.popen = False
+    else:
+      self.popen = False
 
   def get_compobj(self):
     return self.bz2.BZ2Compressor(self.comp)
