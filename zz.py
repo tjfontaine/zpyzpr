@@ -167,14 +167,15 @@ class Bzip2Worker(BaseWorker):
 
 class ZpyZprOpts:
   def __init__(self, argv):
-    sopt = 'b:c:hjkt:vzT'
-    lopt = ['help', 'keep', 'verbose', 'timing', 'gzip', 'bzip2', 'blocks=', 'compression=', 'threads=']
+    sopt = '123456789cb:hjkt:vzT'
+    lopt = ['help', 'keep', 'verbose', 'timing', 'gzip', 'bzip2', 'blocks=', 'compression=', 'threads=', 'stdin']
     self.verbose     = False
     self.timing      = False
     self.blocks      = None # Automaticly determined
     self.threads     = 4 # Should this be determined magically?
     self.keep        = False
     self.compression = 6
+    self.stdin       = False
 
     if GzipWorker.enabled:
       self.worker    = GzipWorker
@@ -204,8 +205,10 @@ class ZpyZprOpts:
         self.blocks  = int(a)
       elif o in ('-t', '--threads'):
         self.threads = int(a)
-      elif o in ('-c', '--compression'):
+      elif o is '--compression':
         self.compression = int(a)
+      elif o in ('1', '2', '3', '4', '5', '6', '7', '8', '9'):
+        self.compression = int(o)
       elif o in ('-T', '--timing'):
         self.timing = True
       elif o in ('-z', '--gzip'):
@@ -220,28 +223,30 @@ class ZpyZprOpts:
         else:
           sys.stderr.write('bz2 module not available for compression' + os.linesep)
           sys.exit(2)
+      elif o in ('-c', '--stdin'):
+        self.stdin = True
     
-    if len(args) < 1 or len(args) > 2:
+    if not self.stdin and (len(args) < 1 or len(args) > 2):
       sys.stderr.write('Wrong number of arguments passed.' + os.linesep)
       self.usage(True)
       sys.exit(2)
+    elif not self.stdin:
+      self.source = args[0]
 
-    self.source = args[0]
+      if len(args) == 2:
+        self.destination = args[1]
+      else:
+        self.destination = self.source + self.worker.ext
 
-    if len(args) == 2:
-      self.destination = args[1]
-    else:
-      self.destination = self.source + self.worker.ext
+      if not os.path.exists(self.source):
+        sys.stderr.write('Source file (%s) does not exist!%s' % (self.source, os.linesep))
+        self.usage(True)
+        sys.exit(2)
 
-    if not os.path.exists(self.source):
-      sys.stderr.write('Source file (%s) does not exist!%s' % (self.source, os.linesep))
-      self.usage(True)
-      sys.exit(2)
-
-    if os.path.exists(self.destination):
-      sys.stderr.write('Destination file (%s) already exists!%s' % (self.destination, os.linesep))
-      self.usage(True)
-      sys.exit(2)
+      if os.path.exists(self.destination):
+        sys.stderr.write('Destination file (%s) already exists!%s' % (self.destination, os.linesep))
+        self.usage(True)
+        sys.exit(2)
 
   def usage(self, err):
     e = os.linesep
@@ -267,7 +272,9 @@ class ZpyZprOpts:
     p(''+e)
     p('-b --blocks=       Specify the logical block size for each compressed block'+e)
     p('                     (Default: 10M or the size of the file divided by the number of threads)'+e)
-    p('-c --compression=  Compression Level (Default: 6)'+e)
+    p('-N --compression=  Compression Level (Default: 6)'+e)
+    p('                     -1 -2 .. -9'+e)
+    p('-c --stdin         Read from standard input, output to standard out'+e)
     p('-h --help          Prints this message'+e)
     p('-j --bzip2         Use bzip2 compression'+e)
     p('                     '+bzip_enabled+e)
@@ -290,17 +297,27 @@ class ZpyZpr:
     self.threads = []
     self.eof_reached = False
 
-    self.source_size = os.stat(opts.source).st_size
-    self.source = open(opts.source, 'rb')
-
     self.block_size = self.opts.blocks
     if not self.block_size:
       self.block_size = CHUNK_SIZE_BYTES
       self.log(self.opts.verbose, 'No Block Size Defined Using Default: %d' % self.block_size)
 
-    if self.source_size < self.block_size * self.opts.threads:
-      self.block_size = self.source_size / self.opts.threads
-      self.log(self.opts.verbose, 'Source size is smaller than block size using source/thread: %d' % self.block_size)
+    if not self.opts.stdin:
+      self.source_size = os.stat(opts.source).st_size
+      self.source = open(opts.source, 'rb')
+
+      if self.source_size < self.block_size * self.opts.threads:
+        self.block_size = self.source_size / self.opts.threads
+        self.log(self.opts.verbose, 'Source size is smaller than block size using source/thread: %d' % self.block_size)
+
+      if os.path.exists(self.opts.destination):
+        self.log(True, "%s Destination File Already Exists" % self.opts.destination)
+        sys.exit(1)
+      self.result_file = open(self.opts.destination, 'wb')
+    else:
+      self.source_size = -1
+      self.source = sys.stdin
+      self.result_file = sys.stdout
 
     b = datetime.now()
     self.log(self.opts.timing, "Beginning Compression using %s (%d Threads)" % (MULTIPROCESSING, self.opts.threads))
@@ -310,8 +327,6 @@ class ZpyZpr:
     self.combine()
     e = datetime.now()
 
-    self.result_file.close()
-    if not self.opts.keep: os.remove(self.opts.source)
 
     self.log(self.opts.timing, 'Total Time: '+str(e - b))
 
@@ -326,13 +341,16 @@ class ZpyZpr:
       p.close()
       t.join()
 
-    if self.result_file:
+    if not self.opts.stdin and self.result_file:
       self.result_file.close()
 
-    if err and os.path.exists(self.opts.destination):
+    if err and not self.opts.stdin and os.path.exists(self.opts.destination):
       os.remove(self.opts.destination)
 
-    self.source.close()
+    if not self.opts.stdin:
+      self.source.close() 
+      self.result_file.close()
+      if not self.opts.keep: os.remove(self.opts.source)
 
   def get_item(self):
     try:
@@ -361,14 +379,21 @@ class ZpyZpr:
 
   def read_next(self):
     bsize = self.total_read + self.block_size
-    loc = self.source.tell()
+
+    if not self.opts.stdin:
+      loc = self.source.tell()
+
     data = self.source.read(bsize)
     self.total_read += len(data)
+
     if data == '':
       self.eof_reached = True
       return None
     else:
-      self.log(self.opts.verbose, 'Reading block at %d/%d' % (loc, self.source_size))
+      if not self.opts.stdin:
+        self.log(self.opts.verbose, 'Reading block at %d/%d' % (loc, self.source_size))
+      else:
+        self.log(self.opts.verbose, 'Read another %d of %d total' % (len(data), self.total_read))
       return data
 
   def still_reading(self):
@@ -397,12 +422,6 @@ class ZpyZpr:
     if display: sys.stderr.write('[%s] %s%s' % (datetime.now(), message, os.linesep))
 
   def combine(self):
-    if not self.result_file:
-      if os.path.exists(self.opts.destination):
-        self.log(True, "%s Destination File Already Exists" % self.opts.destination)
-        sys.exit(1)
-      self.result_file = open(self.opts.destination, 'wb')
-
     next_block = self.last_completed + 1
 
     while(self.completed.has_key(next_block)):
