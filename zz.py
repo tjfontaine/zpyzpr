@@ -283,15 +283,27 @@ class ZpyZpr:
     self.opts = opts
     self.event_queue = Queue()
     self.result_file = None
+    self.completed = {}
+    self.last_completed = -1
+    self.next_place = 0
+    self.total_read = 0
+    self.threads = []
+    self.eof_reached = False
 
     self.source_size = os.stat(opts.source).st_size
-
     self.source = open(opts.source, 'rb')
 
-    self.prepare_threads()
+    self.block_size = self.opts.blocks
+    if not self.block_size:
+      self.block_size = CHUNK_SIZE_BYTES
+      self.log(self.opts.verbose, 'No Block Size Defined Using Default: %d' % self.block_size)
+
+    if self.source_size < self.block_size * self.opts.threads:
+      self.block_size = self.source_size / self.opts.threads
+      self.log(self.opts.verbose, 'Source size is smaller than block size using source/thread: %d' % self.block_size)
 
     b = datetime.now()
-    self.log(self.opts.timing, "Beginning Compression using %s (%d Pieces/%d Threads)" % (MULTIPROCESSING, len(self.thread_queue), self.opts.threads))
+    self.log(self.opts.timing, "Beginning Compression using %s (%d Threads)" % (MULTIPROCESSING, self.opts.threads))
     self.start()
 
     self.log(self.opts.verbose, "Combing Leftover Slices")
@@ -322,34 +334,6 @@ class ZpyZpr:
 
     self.source.close()
 
-  def prepare_threads(self):
-    self.thread_queue = []
-    self.completed = []
-    self.last_completed = -1
-    bsize = 0
-
-    if not self.opts.blocks:
-      # Determine slice size based on number of threads and the default chunk size
-      # by default if the file is less than 40MB it'll be size / threads
-      if self.source_size < CHUNK_SIZE_BYTES * self.opts.threads:
-        bsize = self.source_size / self.opts.threads
-      else:
-        bsize = CHUNK_SIZE_BYTES
-    else:
-      bsize = self.opts.blocks
-
-    count = 0
-    while(count < self.source_size):
-      if self.source_size - count < bsize:
-        size = self.source_size - count
-      else:
-        size = bsize
-
-      self.thread_queue.append((len(self.thread_queue), count, size))
-      self.completed.append(None)
-      self.log(self.opts.verbose, 'Added Worker %d (offset:%d, size:%d)' % (len(self.thread_queue), count, size))
-      count += size
-
   def get_item(self):
     try:
       e = self.event_queue.get(timeout=0.25)
@@ -363,22 +347,41 @@ class ZpyZpr:
       (threadid, place, header, suffix, data) = item
       self.log(self.opts.verbose, 'Completed Piece %d' % (place+1))
       self.completed[place] = (header, suffix, data)
-      if len(self.thread_queue) > 0:
-        self.send_next_block(threadid)
+      self.send_next_block(threadid)
       self.combine()
       item = self.get_item()
 
   def send_next_block(self, threadid):
-    (place, offset, size) = self.thread_queue.pop()
-    self.log(self.opts.verbose, 'Started Piece %d' % (place+1))
-    self.source.seek(offset)
-    self.threads[threadid][1].send((self.source.read(size), place))
+    place = self.next_place
+    data = self.read_next()
+    if data:
+      self.log(self.opts.verbose, 'Started Piece %d' % (place+1))
+      self.threads[threadid][1].send((data, place))
+      self.next_place += 1
+
+  def read_next(self):
+    bsize = self.total_read + self.block_size
+    loc = self.source.tell()
+    data = self.source.read(bsize)
+    self.total_read += len(data)
+    if data == '':
+      self.eof_reached = True
+      return None
+    else:
+      self.log(self.opts.verbose, 'Reading block at %d/%d' % (loc, self.source_size))
+      return data
+
+  def still_reading(self):
+    # Succintly put
+    #return not self.eof_reached or self.last_completed < self.next_place-1
+    if not self.eof_reached: #If we haven't reached the end of the stream keep processing
+      return True
+    elif self.last_completed < self.next_place-1: #finished the stream, but haven't completed compression
+      return True
+    else:
+      return False #we're done reading and compressing
 
   def start(self):
-    self.thread_queue.reverse()
-    self.last_started = 0
-    self.threads = []
-
     for i in range(self.opts.threads):
       threadid = len(self.threads)
       (parent, client) = Pipe()
@@ -387,9 +390,8 @@ class ZpyZpr:
       t.start()
       self.send_next_block(threadid)
 
-    while self.last_completed < len(self.completed):
+    while self.still_reading():
       self.run_queue()
-      self.log(self.opts.verbose, 'Progress %d/%d' % (self.last_completed, len(self.completed)))
 
   def log(self, display, message):
     if display: sys.stderr.write('[%s] %s%s' % (datetime.now(), message, os.linesep))
@@ -403,9 +405,9 @@ class ZpyZpr:
 
     next_block = self.last_completed + 1
 
-    while(next_block < len(self.completed) and self.completed[next_block]):
+    while(self.completed.has_key(next_block)):
       t = self.completed[next_block]
-      self.completed[next_block] = None
+      del self.completed[next_block]
       (header, suffix, data) = t
       t = None
       self.log(self.opts.verbose, "Combined %s" % (next_block+1))
@@ -418,7 +420,5 @@ class ZpyZpr:
 
       self.last_completed = next_block
       next_block += 1
-
-    if next_block == len(self.completed): self.last_completed += 1
 
 ZpyZpr(ZpyZprOpts(sys.argv[1:]))
