@@ -56,7 +56,7 @@ except Exception, ex:
       q = FakePipe()
       return (q, q)
 
-CHUNK_SIZE_BYTES = 10*1024*1024 # 10 MB
+CHUNK_SIZE_BYTES = 1024000 # 1000K
 BLOCK_SIZE = 1024
 #GZIP_HEADER = struct.pack("<BBBBBBBBBB", 31, 139, 8, 0, 0,0,0,0, 2, 3)
 GZIP_HEADER = '\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03'
@@ -176,6 +176,8 @@ class ZpyZprOpts:
     self.keep        = False
     self.compression = 6
     self.stdin       = False
+    self.source      = None
+    self.destination = None
 
     if GzipWorker.enabled:
       self.worker    = GzipWorker
@@ -445,6 +447,6 @@ if __name__ == '__main__':
   zz.cleanup()
   end = datetime.now()
   zz.log(opts.timing, 'Total Time: ' + str(end - begin))
-  if not opts.keep: os.remove(opts.source)
+  if not opts.keep and not opts.stdin: os.remove(opts.source)
 
 
