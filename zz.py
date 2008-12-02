@@ -286,10 +286,11 @@ class ZpyZprOpts:
     p('-v --verbose       Prints timings and other debug information'+e)
 
 class ZpyZpr:
-  def __init__(self, opts):
-    self.opts = opts
+  def __init__(self, sourceFile=None, destinationFile=None,
+                     worker=GzipWorker, stdin=False, threads=4,
+                     block_size=CHUNK_SIZE_BYTES, compression=6,
+                     debug=False):
     self.event_queue = Queue()
-    self.result_file = None
     self.completed = {}
     self.last_completed = -1
     self.next_place = 0
@@ -297,88 +298,79 @@ class ZpyZpr:
     self.threads = []
     self.eof_reached = False
 
-    self.block_size = self.opts.blocks
+    self.stdin = stdin
+    self.thread_count = threads
+    self.debug = debug
+    self.destinationFile = destinationFile
+    self.block_size = block_size
+    self.compression = compression
+    self.worker = worker
+
     if not self.block_size:
       self.block_size = CHUNK_SIZE_BYTES
-      self.log(self.opts.verbose, 'No Block Size Defined Using Default: %d' % self.block_size)
+      self.log(self.debug, 'No Block Size Defined Using Default: %d' % self.block_size)
 
-    if not self.opts.stdin:
-      self.source_size = os.stat(opts.source).st_size
-      self.source = open(opts.source, 'rb')
+    if not self.stdin:
+      self.source_size = os.stat(sourceFile).st_size
+      self.source = open(sourceFile, 'rb')
 
-      if self.source_size < self.block_size * self.opts.threads:
-        self.block_size = self.source_size / self.opts.threads
-        self.log(self.opts.verbose, 'Source size is smaller than block size using source/thread: %d' % self.block_size)
+      if self.source_size < self.block_size * self.thread_count:
+        self.block_size = self.source_size / self.thread_count
+        self.log(self.debug, 'Source size is smaller than block size using source/thread: %d' % self.block_size)
 
-      if os.path.exists(self.opts.destination):
-        self.log(True, "%s Destination File Already Exists" % self.opts.destination)
-        sys.exit(1)
-      self.result_file = open(self.opts.destination, 'wb')
+      if os.path.exists(self.destinationFile):
+        raise Exception("%s Destination File Already Exists" % self.destinationFile)
+
+      self.result_file = open(self.destinationFile, 'wb')
     else:
       self.source_size = -1
       self.source = sys.stdin
       self.result_file = sys.stdout
 
-    b = datetime.now()
-    self.log(self.opts.timing, "Beginning Compression using %s (%d Threads)" % (MULTIPROCESSING, self.opts.threads))
-    self.start()
-
-    self.log(self.opts.verbose, "Combing Leftover Slices")
-    self.combine()
-    e = datetime.now()
-
-
-    self.log(self.opts.timing, 'Total Time: '+str(e - b))
-
-    self.source.close()
-
-    self.cleanup()
-
   def cleanup(self, err=False):
-    self.log(self.opts.verbose, 'Joining all threads')
+    self.log(self.debug, 'Joining all threads')
     for t,p in self.threads:
       p.send('STOP')
       p.close()
       t.join()
 
-    if not self.opts.stdin and self.result_file:
+    if not self.stdin and self.result_file:
       self.result_file.close()
 
-    if err and not self.opts.stdin and os.path.exists(self.opts.destination):
-      os.remove(self.opts.destination)
+    if err and not self.stdin and os.path.exists(self.destinationFile):
+      os.remove(self.destinationFile)
 
-    if not self.opts.stdin:
+    if not self.stdin:
       self.source.close() 
       self.result_file.close()
-      if not self.opts.keep: os.remove(self.opts.source)
 
-  def get_item(self):
+  def __get_item(self):
     try:
       e = self.event_queue.get(timeout=0.25)
       return e
     except Empty:
       return None
 
-  def run_queue(self):
-    item = self.get_item()
+  def __run_queue(self):
+    item = self.__get_item()
     while item:
       (threadid, place, header, suffix, data) = item
-      self.log(self.opts.verbose, 'Completed Piece %d' % (place+1))
+      self.log(self.debug, 'Completed Piece %d' % (place+1))
       self.completed[place] = (header, suffix, data)
-      self.send_next_block(threadid)
+      self.__send_next_block(threadid)
       self.combine()
-      item = self.get_item()
+      item = self.__get_item()
 
-  def send_next_block(self, threadid):
+  def __send_next_block(self, threadid):
     place = self.next_place
-    data = self.read_next()
+    data = self.__read_next()
     if data:
-      self.log(self.opts.verbose, 'Started Piece %d' % (place+1))
+      self.log(self.debug, 'Started Piece %d' % (place+1))
       self.threads[threadid][1].send((data, place))
       self.next_place += 1
 
-  def read_next(self):
-    if not self.opts.stdin:
+  def __read_next(self):
+    if not self.stdin:
       loc = self.source.tell()
 
     data = self.source.read(self.block_size)
@@ -388,13 +380,10 @@ class ZpyZpr:
       self.eof_reached = True
       return None
     else:
-      if not self.opts.stdin:
-        self.log(self.opts.verbose, 'Reading block at %d/%d' % (loc, self.source_size))
-      else:
-        self.log(self.opts.verbose, 'Read another %d of %d total' % (len(data), self.total_read))
+      self.log(self.debug, 'Read another %d (%d total read)' % (len(data), self.total_read))
       return data
 
-  def still_reading(self):
+  def __still_reading(self):
     # Succintly put
     #return not self.eof_reached or self.last_completed < self.next_place-1
     if not self.eof_reached: #If we haven't reached the end of the stream keep processing
@@ -405,16 +394,16 @@ class ZpyZpr:
       return False #we're done reading and compressing
 
   def start(self):
-    for i in range(self.opts.threads):
+    for i in range(self.thread_count):
       threadid = len(self.threads)
       (parent, client) = Pipe()
-      t = self.opts.worker(threadid, self.opts.compression, self.event_queue, client)
+      t = self.worker(threadid, self.compression, self.event_queue, client)
       self.threads.append((t, parent))
       t.start()
-      self.send_next_block(threadid)
+      self.__send_next_block(threadid)
 
-    while self.still_reading():
-      self.run_queue()
+    while self.__still_reading():
+      self.__run_queue()
 
   def log(self, display, message):
     if display: sys.stderr.write('[%s] %s%s' % (datetime.now(), message, os.linesep))
@@ -427,7 +416,7 @@ class ZpyZpr:
       del self.completed[next_block]
       (header, suffix, data) = t
       t = None
-      self.log(self.opts.verbose, "Combined %s" % (next_block+1))
+      self.log(self.debug, "Combined %s" % (next_block+1))
       src = self.result_file
       src.write(header)
       src.write(data)
@@ -438,4 +427,24 @@ class ZpyZpr:
       self.last_completed = next_block
       next_block += 1
 
-ZpyZpr(ZpyZprOpts(sys.argv[1:]))
+if __name__ == '__main__':
+  opts = ZpyZprOpts(sys.argv[1:])
+
+  zz = ZpyZpr(sourceFile=opts.source,
+              destinationFile=opts.destination,
+              worker=opts.worker,
+              stdin=opts.stdin,
+              threads=opts.threads,
+              block_size=opts.blocks,
+              debug=opts.verbose)
+
+  zz.log(opts.timing, 'Beginning Compression using %s (%d Threads)' % (MULTIPROCESSING, opts.threads))
+  begin = datetime.now()
+  zz.start()
+  zz.combine()
+  zz.cleanup()
+  end = datetime.now()
+  zz.log(opts.timing, 'Total Time: ' + str(end - begin))
+  if not opts.keep: os.remove(opts.source)
+
+
