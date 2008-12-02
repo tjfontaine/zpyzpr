@@ -378,12 +378,10 @@ class ZpyZpr:
       self.next_place += 1
 
   def read_next(self):
-    bsize = self.total_read + self.block_size
-
     if not self.opts.stdin:
       loc = self.source.tell()
 
-    data = self.source.read(bsize)
+    data = self.source.read(self.block_size)
     self.total_read += len(data)
 
     if data == '':
