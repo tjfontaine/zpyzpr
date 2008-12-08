@@ -166,10 +166,9 @@ class Bzip2Worker(BaseWorker):
 
 
 class ZpyZpr:
-  def __init__(self, sourceFile=None, destinationFile=None,
-                     worker=GzipWorker, stdin=False, threads=4,
+  def __init__(self, worker=GzipWorker, threads=4,
                      block_size=CHUNK_SIZE_BYTES, compression=6,
-                     debug=False):
+                     debug=False, logger=sys.stderr):
     self.event_queue = Queue()
     self.completed = {}
     self.last_completed = -1
@@ -178,51 +177,23 @@ class ZpyZpr:
     self.threads = []
     self.eof_reached = False
 
-    self.stdin = stdin
     self.thread_count = threads
     self.debug = debug
-    self.destinationFile = destinationFile
     self.block_size = block_size
     self.compression = compression
     self.worker = worker
+    self.logger = logger
 
-    if not self.block_size:
-      self.block_size = CHUNK_SIZE_BYTES
-      self.log(self.debug, 'No Block Size Defined Using Default: %d' % self.block_size)
+    if not self.block_size: self.block_size = CHUNK_SIZE_BYTES
 
-    if not self.stdin:
-      self.source_size = os.stat(sourceFile).st_size
-      self.source = open(sourceFile, 'rb')
-
-      if self.source_size < self.block_size * self.thread_count:
-        self.block_size = self.source_size / self.thread_count
-        self.log(self.debug, 'Source size is smaller than block size using source/thread: %d' % self.block_size)
-
-      if os.path.exists(self.destinationFile):
-        raise Exception("%s Destination File Already Exists" % self.destinationFile)
-
-      self.result_file = open(self.destinationFile, 'wb')
-    else:
-      self.source_size = -1
-      self.source = sys.stdin
-      self.result_file = sys.stdout
-
-  def cleanup(self, err=False):
+  def flush(self, err=False):
     self.log(self.debug, 'Joining all threads')
     for t,p in self.threads:
       p.send('STOP')
       p.close()
       t.join()
 
-    if not self.stdin and self.result_file:
-      self.result_file.close()
-
-    if err and not self.stdin and os.path.exists(self.destinationFile):
-      os.remove(self.destinationFile)
-
-    if not self.stdin:
-      self.source.close() 
-      self.result_file.close()
+    if not err: self.__combine()
 
   def __get_item(self):
     try:
@@ -238,7 +209,7 @@ class ZpyZpr:
       self.log(self.debug, 'Completed Piece %d' % (place+1))
       self.completed[place] = (header, suffix, data)
       self.__send_next_block(threadid)
-      self.combine()
+      self.__combine()
       item = self.__get_item()
 
   def __send_next_block(self, threadid):
@@ -250,9 +221,6 @@ class ZpyZpr:
       self.next_place += 1
 
   def __read_next(self):
-    if not self.stdin:
-      loc = self.source.tell()
-
     data = self.source.read(self.block_size)
     self.total_read += len(data)
 
@@ -273,7 +241,10 @@ class ZpyZpr:
     else:
       return False #we're done reading and compressing
 
-  def start(self):
+  def start(self, source, destination):
+    self.source = source
+    self.result_file = destination
+
     for i in range(self.thread_count):
       threadid = len(self.threads)
       (parent, client) = Pipe()
@@ -286,9 +257,9 @@ class ZpyZpr:
       self.__run_queue()
 
   def log(self, display, message):
-    if display: sys.stderr.write('[%s] %s%s' % (datetime.now(), message, os.linesep))
+    if display: self.logger.write('[%s] %s%s' % (datetime.now(), message, os.linesep))
 
-  def combine(self):
+  def __combine(self):
     next_block = self.last_completed + 1
 
     while(self.completed.has_key(next_block)):

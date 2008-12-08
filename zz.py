@@ -24,7 +24,7 @@
 
 from zpyzpr import GzipWorker, Bzip2Worker, ZpyZpr, MULTIPROCESSING
 from datetime import datetime
-import getopt, os, sys
+import getopt, os, sys, traceback
 
 class ZpyZprOpts:
   def __init__(self, argv):
@@ -152,21 +152,38 @@ class ZpyZprOpts:
 if __name__ == '__main__':
   opts = ZpyZprOpts(sys.argv[1:])
 
-  zz = ZpyZpr(sourceFile=opts.source,
-              destinationFile=opts.destination,
-              worker=opts.worker,
-              stdin=opts.stdin,
+  zz = ZpyZpr(worker=opts.worker,
               threads=opts.threads,
               block_size=opts.blocks,
-              debug=opts.verbose)
+              debug=opts.verbose,
+              logger=sys.stderr)
 
-  zz.log(opts.timing, 'Beginning Compression using %s (%d Threads)' % (MULTIPROCESSING, opts.threads))
-  begin = datetime.now()
-  zz.start()
-  zz.combine()
-  zz.cleanup()
-  end = datetime.now()
-  zz.log(opts.timing, 'Total Time: ' + str(end - begin))
-  if not opts.keep and not opts.stdin: os.remove(opts.source)
+  try:
+    zz.log(opts.timing, 'Beginning Compression using %s (%d Threads)' % (MULTIPROCESSING, opts.threads))
+    begin = datetime.now()
 
+    source = open(opts.source, 'rb')
+    destin = open(opts.destination, 'wb')
 
+    zz.start(source, destin)
+    zz.flush()
+    source.close()
+    destin.close()
+
+    if not opts.stdin and not opts.keep: os.remove(opts.source)
+
+    end = datetime.now()
+    zz.log(opts.timing, 'Total Time: ' + str(end - begin))
+
+  except Exception, ex:
+    zz.flush(err=True)
+    if not opts.stdin:
+      destin.close()
+      os.remove(opts.destination)
+
+    if not opts.stdin:
+      source.close()
+
+    zz.log(True, repr(ex))
+    traceback.print_exc(file=zz.logger)
+    sys.exit(1)

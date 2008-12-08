@@ -37,10 +37,13 @@ if __name__ == '__main__':
   for thread in threads:
     for block_size in block_sizes:
       begin = datetime.now()
-      zz = ZpyZpr(sourceFile=sys.argv[1], destinationFile=sys.argv[2], worker=GzipWorker, threads=thread, block_size=block_size)
-      zz.start()
-      zz.combine()
-      zz.cleanup()
+      zz = ZpyZpr(worker=GzipWorker, threads=thread, block_size=block_size)
+      a = open(sys.argv[1], 'rb')
+      b = open(sys.argv[2], 'wb')
+      zz.start(a, b)
+      zz.flush()
+      a.close()
+      b.close()
       end = datetime.now()
       size = os.stat(sys.argv[2]).st_size
       sys.stderr.write('Time: %s | Size: %d\t| Threads: %d\t| Block Size: %d' % (str(end-begin), size-original_size,
