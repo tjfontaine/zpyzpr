@@ -23,7 +23,7 @@
 # OTHER DEALINGS IN THE SOFTWARE
 
 import sys, os
-from zz import ZpyZpr, GzipWorker
+from zpyzpr import ZpyZpr, GzipWorker, Bzip2Worker
 from datetime import datetime
 
 if __name__ == '__main__':
