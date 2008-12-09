@@ -21,23 +21,24 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 # OTHER DEALINGS IN THE SOFTWARE
 
-import zlib, struct
+import zlib, struct, StringIO
 from zpyzpr import BaseWorker, ZpyZpr
 
 class ZlibWorker(BaseWorker):
-  def __init__(self, threadid, compression, queue, pipe):
-    BaseWorker.__init__(self, threadid, compression, queue, pipe)
-    self.popen = False
-
   def get_compobj(self):
     return zlib.compressobj(self.comp)
-
-  def header(self):
-    return ''
-
-  def suffix(self):
-    return ''
 
 class Zlib(ZpyZpr):
   def __init__(self, **kwargs):
     ZpyZpr.__init__(self, worker=ZlibWorker, **kwargs)
+
+def compress(string, level=6, **kwargs):
+  zz = Zlib(compression=level, **kwargs)
+  source = StringIO.StringIO(string)
+  destin = StringIO.StringIO()
+  zz.compressStream(source, destin)
+  zz.flush()
+  data = destin.getvalue()
+  source.close()
+  destin.close()
+  return data

@@ -28,10 +28,6 @@ from zpyzpr import BaseWorker, ZpyZpr
 GZIP_HEADER = '\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03'
 
 class GzipWorker(BaseWorker):
-  def __init__(self, threadid, compression, queue, pipe):
-    BaseWorker.__init__(self, threadid, compression, queue, pipe)
-    self.popen = False
-
   def get_compobj(self):
     return zlib.compressobj(self.comp, zlib.DEFLATED, -zlib.MAX_WBITS, zlib.DEF_MEM_LEVEL, 0)
 

@@ -56,13 +56,18 @@ CHUNK_SIZE_BYTES = 1024000 # 1000K
 BLOCK_SIZE = 1024
 
 class BaseWorker(Thread):
-  ext = '.dummy'
   def __init__(self, threadid, compression, queue, pipe):
     Thread.__init__(self)
     self.threadid = threadid
     self.comp = compression
     self.queue = queue
     self.pipe = pipe
+
+  def header(self):
+    return ''
+
+  def suffix(self):
+    return ''
 
   def get_item(self):
     try:
@@ -83,13 +88,9 @@ class BaseWorker(Thread):
         (self.raw_data, place) = item
         self.fsize = len(self.raw_data)
 
-        if not self.popen:
-          compobj = self.get_compobj()
-          data = compobj.compress(self.raw_data)
-          data += compobj.flush()
-        else:
-          p = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-          (data, stderr) = p.communicate(self.raw_data)
+        compobj = self.get_compobj()
+        data = compobj.compress(self.raw_data)
+        data += compobj.flush()
 
         self.queue.put((self.threadid, place, self.header(), self.suffix(), data))
         data = None

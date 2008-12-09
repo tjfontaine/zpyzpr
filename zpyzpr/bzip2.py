@@ -21,23 +21,24 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 # OTHER DEALINGS IN THE SOFTWARE
 
-import bz2
+import bz2, StringIO
 from zpyzpr import BaseWorker, ZpyZpr
 
 class Bzip2Worker(BaseWorker):
-  def __init__(self, threadid, compression, queue, pipe):
-    BaseWorker.__init__(self, threadid, compression, queue, pipe)
-    self.popen = False
-
   def get_compobj(self):
     return self.bz2.BZ2Compressor(self.comp)
-
-  def header(self):
-    return ''
-
-  def suffix(self):
-    return ''
 
 class Bzip2(ZpyZpr):
   def __init__(self, **kwargs):
     ZpyZpr.__init__(self, worker=Bzip2Worker, **kwargs)
+
+def compress(string, level=6, **kwargs):
+  zz = Bzip2(compression=level, **kwargs)
+  source = StringIO.StringIO(string)
+  destin = StringIO.StringIO()
+  zz.compressStream(source, destin)
+  zz.flush()
+  data = destin.getvalue()
+  source.close()
+  destin.close()
+  return data
