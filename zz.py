@@ -22,9 +22,21 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 # OTHER DEALINGS IN THE SOFTWARE
 
-from zpyzpr import GzipWorker, Bzip2Worker, ZpyZpr, MULTIPROCESSING
+from zpyzpr import MULTIPROCESSING
 from datetime import datetime
 import getopt, os, sys, traceback
+
+try:
+  from zpyzpr.gzip import Gzip
+  GZIP_ENABLED = True
+except:
+  GZIP_ENABLED = False
+
+try:
+  from zpyzpr.bzip2 import Bzip2
+  BZIP_ENABLED = True
+except:
+  BZIP_ENABLED = False
 
 class ZpyZprOpts:
   def __init__(self, argv):
@@ -40,10 +52,10 @@ class ZpyZprOpts:
     self.source      = None
     self.destination = None
 
-    if GzipWorker.enabled:
-      self.worker    = GzipWorker
-    elif Bzip2Worker.enabled:
-      self.worker    = Bzip2Worker
+    if GZIP_ENABLED:
+      self.worker    = Gzip
+    elif BZIP_ENABLED:
+      self.worker    = Bzip2
     else:
       sys.stderr.write('No compression libraries available.' + os.linesep)
       sys.exit(2)
@@ -75,14 +87,14 @@ class ZpyZprOpts:
       elif o in ('-T', '--timing'):
         self.timing = True
       elif o in ('-z', '--gzip'):
-        if GzipWorker.enabled:
-          self.worker = GzipWorker
+        if GZIP_ENABLED:
+          self.worker = Gzip
         else:
           sys.stderr.write('zlib module not available for compression' + os.linesep)
           sys.exit(2)
       elif o in ('-j', '--bzip2'):
-        if Bzip2Worker.enabled:
-          self.worker = Bzip2Worker
+        if BZIP_ENABLED:
+          self.worker = Bzip2
         else:
           sys.stderr.write('bz2 module not available for compression' + os.linesep)
           sys.exit(2)
@@ -99,7 +111,14 @@ class ZpyZprOpts:
       if len(args) == 2:
         self.destination = args[1]
       else:
-        self.destination = self.source + self.worker.ext
+        self.destination = self.source
+        if self.worker is Gzip:
+          self.destination += '.gz'
+        elif self.worker is Bzip2:
+          self.destination += '.bz2'
+        else:
+          sys.stderr.write('Cannot determine destination extension'+os.linesep)
+          sys.exit(2)
 
       if not os.path.exists(self.source):
         sys.stderr.write('Source file (%s) does not exist!%s' % (self.source, os.linesep))
@@ -119,14 +138,14 @@ class ZpyZprOpts:
       p = sys.stdout.write
 
     gzip_enabled = 'gzip compression is '
-    if GzipWorker.enabled:
+    if GZIP_ENABLED:
       gzip_enabled += 'enabled'
     else:
       gzip_enabled += 'disabled'
 
 
     bzip_enabled = 'bzip2 compression is '
-    if Bzip2Worker.enabled:
+    if BZIP_ENABLED:
       bzip_enabled += 'enabled'
     else:
       bzip_enabled += 'disabled'
@@ -152,11 +171,10 @@ class ZpyZprOpts:
 if __name__ == '__main__':
   opts = ZpyZprOpts(sys.argv[1:])
 
-  zz = ZpyZpr(worker=opts.worker,
-              threads=opts.threads,
-              block_size=opts.blocks,
-              debug=opts.verbose,
-              logger=sys.stderr)
+  zz = opts.worker(threads=opts.threads,
+                   block_size=opts.blocks,
+                   debug=opts.verbose,
+                   logger=sys.stderr)
 
   try:
     zz.log(opts.timing, 'Beginning Compression using %s (%d Threads)' % (MULTIPROCESSING, opts.threads))
