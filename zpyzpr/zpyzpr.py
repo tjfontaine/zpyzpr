@@ -173,7 +173,7 @@ class ZpyZpr:
     else:
       return False #we're done reading and compressing
 
-  def start(self, source, destination):
+  def compressStream(self, source, destination):
     self.source = source
     self.result_file = destination
 

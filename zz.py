@@ -183,7 +183,7 @@ if __name__ == '__main__':
     source = open(opts.source, 'rb')
     destin = open(opts.destination, 'wb')
 
-    zz.start(source, destin)
+    zz.compressStream(source, destin)
     zz.flush()
     source.close()
     destin.close()
