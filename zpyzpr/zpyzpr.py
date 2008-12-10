@@ -106,6 +106,7 @@ class ZpyZpr:
     self.next_place = 0
     self.total_read = 0
     self.threads = []
+    self.idle_threads = []
     self.eof_reached = False
 
     self.thread_count = threads
@@ -119,6 +120,14 @@ class ZpyZpr:
 
     if not self.block_size: self.block_size = CHUNK_SIZE_BYTES
 
+    for i in range(self.thread_count):
+      threadid = len(self.threads)
+      (parent, client) = Pipe()
+      t = self.worker(threadid, self.compression, self.event_queue, client)
+      self.threads.append((t, parent))
+      t.start()
+      self.idle_threads.append(threadid)
+
   def flush(self, err=False):
     self.log(self.debug, 'Joining all threads')
     for t,p in self.threads:
@@ -130,7 +139,7 @@ class ZpyZpr:
 
   def __get_item(self):
     try:
-      e = self.event_queue.get(timeout=0.25)
+      e = self.event_queue.get(timeout=0.20)
       return e
     except Empty:
       return None
@@ -139,19 +148,26 @@ class ZpyZpr:
     item = self.__get_item()
     while item:
       (threadid, place, header, suffix, data) = item
-      self.log(self.debug, 'Completed Piece %d' % (place+1))
+      self.log(self.debug, 'Thread %d Completed Piece %d' % (threadid, place+1))
       self.completed[place] = (header, suffix, data)
-      self.__send_next_block(threadid)
+      self.idle_threads.append(threadid)
       self.__combine()
+      self.__send_next_block()
       item = self.__get_item()
 
-  def __send_next_block(self, threadid):
-    place = self.next_place
-    data = self.__read_next()
-    if data:
-      self.log(self.debug, 'Started Piece %d' % (place+1))
-      self.threads[threadid][1].send((data, place))
-      self.next_place += 1
+  def __send_next_block(self):
+    count = len(self.idle_threads)
+    while count > 0:
+      count -= 1
+      threadid = self.idle_threads.pop()
+      data = self.__read_next()
+      if data:
+        place = self.next_place
+        self.log(self.debug, 'Thread %d Started Piece %d' % (threadid, place+1))
+        self.threads[threadid][1].send((data, place))
+        self.next_place += 1
+      else:
+        self.idle_threads.append(threadid)
 
   def __read_next(self):
     data = self.source.read(self.block_size)
@@ -178,16 +194,11 @@ class ZpyZpr:
     self.source = source
     self.result_file = destination
 
-    for i in range(self.thread_count):
-      threadid = len(self.threads)
-      (parent, client) = Pipe()
-      t = self.worker(threadid, self.compression, self.event_queue, client)
-      self.threads.append((t, parent))
-      t.start()
-      self.__send_next_block(threadid)
+    self.__send_next_block()
 
     while self.__still_reading():
       self.__run_queue()
+      self.__send_next_block()
 
   def log(self, display, message):
     if display: self.logger.write('[%s] %s%s' % (datetime.now(), message, os.linesep))
