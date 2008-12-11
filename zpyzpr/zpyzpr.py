@@ -97,7 +97,7 @@ class BaseWorker(Thread):
         self.raw_data = None
 
 class ZpyZpr:
-  def __init__(self, worker=None, threads=4,
+  def __init__(self, worker=None, threads=None,
                      block_size=CHUNK_SIZE_BYTES, compression=6,
                      debug=False, logger=sys.stderr):
     self.event_queue = Queue()
@@ -115,6 +115,8 @@ class ZpyZpr:
     self.compression = compression
     self.worker = worker
     self.logger = logger
+
+    if not self.thread_count: self.thread_count = self.processor_count()
 
     if not self.worker: raise Exception('Cannot initialize compression worker')
 
@@ -221,3 +223,25 @@ class ZpyZpr:
 
       self.last_completed = next_block
       next_block += 1
+
+  @staticmethod
+  def processor_count():
+   """
+   Detects the number of CPUs on a system. Cribbed from pp.
+   From http://codeliberates.blogspot.com/2008/05/detecting-cpuscores-in-python.html
+   """
+   # Linux, Unix and MacOS:
+   if hasattr(os, "sysconf"):
+       if os.sysconf_names.has_key("SC_NPROCESSORS_ONLN"):
+           # Linux & Unix:
+           ncpus = os.sysconf("SC_NPROCESSORS_ONLN")
+           if isinstance(ncpus, int) and ncpus > 0:
+               return ncpus
+       else: # OSX:
+           return int(os.popen2("sysctl -n hw.ncpu")[1].read())
+   # Windows:
+   if os.environ.has_key("NUMBER_OF_PROCESSORS"):
+           ncpus = int(os.environ["NUMBER_OF_PROCESSORS"]);
+           if ncpus > 0:
+               return ncpus
+   return 1  # Default

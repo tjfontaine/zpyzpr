@@ -45,7 +45,6 @@ class ZpyZprOpts:
     self.verbose     = False
     self.timing      = False
     self.blocks      = None # Automaticly determined
-    self.threads     = 4 # Should this be determined magically?
     self.keep        = False
     self.compression = 6
     self.stdin       = False
@@ -59,6 +58,8 @@ class ZpyZprOpts:
     else:
       sys.stderr.write('No compression libraries available.' + os.linesep)
       sys.exit(2)
+
+    self.threads     = self.worker.processor_count()+1 # Should this be determined magically?
 
     try:
       opts, args = getopt.getopt(argv, sopt, lopt)
