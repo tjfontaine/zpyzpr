@@ -26,7 +26,7 @@ from zpyzpr import BaseWorker, ZpyZpr
 
 class Bzip2Worker(BaseWorker):
   def get_compobj(self):
-    return self.bz2.BZ2Compressor(self.comp)
+    return bz2.BZ2Compressor(self.comp)
 
 class Bzip2(ZpyZpr):
   def __init__(self, **kwargs):
