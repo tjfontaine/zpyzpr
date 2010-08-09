@@ -38,10 +38,16 @@ try:
 except:
   BZIP_ENABLED = False
 
+try:
+  from zpyzpr.lzip import Lzip
+  LZIP_ENABLED = True
+except:
+  LZIP_ENABLED= False
+
 class ZpyZprOpts:
   def __init__(self, argv):
-    sopt = '123456789cb:hjkt:vzT'
-    lopt = ['help', 'keep', 'verbose', 'timing', 'gzip', 'bzip2', 'blocks=', 'compression=', 'threads=', 'stdin']
+    sopt = '123456789cb:hjkt:vzTl'
+    lopt = ['help', 'keep', 'verbose', 'timing', 'gzip', 'bzip2', 'blocks=', 'compression=', 'threads=', 'stdin', 'lzip']
     self.verbose     = False
     self.timing      = False
     self.blocks      = None # Automaticly determined
@@ -55,6 +61,8 @@ class ZpyZprOpts:
       self.worker    = Gzip
     elif BZIP_ENABLED:
       self.worker    = Bzip2
+    elif LZIP_ENABLED:
+      self.worker    = Lzip
     else:
       sys.stderr.write('No compression libraries available.' + os.linesep)
       sys.exit(2)
@@ -99,6 +107,12 @@ class ZpyZprOpts:
         else:
           sys.stderr.write('bz2 module not available for compression' + os.linesep)
           sys.exit(2)
+      elif o in ('-l', '--lzip'):
+        if LZIP_ENABLED:
+          self.worker = Lzip
+        else:
+          sys.stderr.write('lzip module not available for compression' + os.linesep)
+          sys.exit(2)
       elif o in ('-c', '--stdin'):
         self.stdin = True
     
@@ -117,6 +131,8 @@ class ZpyZprOpts:
           self.destination += '.gz'
         elif self.worker is Bzip2:
           self.destination += '.bz2'
+        elif self.worker is Lzip:
+          self.destination += '.lz'
         else:
           sys.stderr.write('Cannot determine destination extension'+os.linesep)
           sys.exit(2)
@@ -151,6 +167,12 @@ class ZpyZprOpts:
     else:
       bzip_enabled += 'disabled'
 
+    lzip_enabled = 'lzip compression is '
+    if LZIP_ENABLED:
+      lzip_enabled += 'enabled'
+    else:
+      lzip_enabled += 'disabled'
+
     p('zz [opts] <sourcefile> [destinationfile]'+e)
     p(''+e)
     p('-b --blocks=       Specify the logical block size for each compressed block'+e)
@@ -162,6 +184,8 @@ class ZpyZprOpts:
     p('-j --bzip2         Use bzip2 compression'+e)
     p('                     '+bzip_enabled+e)
     p('-k --keep          Keep source files (The original source and intermediate slices)'+e)
+    p('-l --lzip          Use lzip compression'+e)
+    p('                     '+lzip_enabled+e)
     p('-t --threads=      Specify the number compression threads (Default: 4)'+e)
     p('-T --timing        Prints timings only'+e)
     p('-z --gzip          Use gzip compression (Default)'+e)

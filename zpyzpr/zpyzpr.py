@@ -89,11 +89,11 @@ class BaseWorker(Thread):
         self.fsize = len(self.raw_data)
 
         compobj = self.get_compobj()
-        data = compobj.compress(self.raw_data)
-        data += compobj.flush()
+        self.data = compobj.compress(self.raw_data)
+        self.data += compobj.flush()
 
-        self.queue.put((self.threadid, place, self.header(), self.suffix(), data))
-        data = None
+        self.queue.put((self.threadid, place, self.header(), self.suffix(), self.data))
+        self.data = None
         self.raw_data = None
 
 class ZpyZpr:
